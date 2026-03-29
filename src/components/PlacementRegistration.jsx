@@ -20,12 +20,50 @@ const departments = [
 ];
 
 const years = ["1st Year", "2nd Year", "3rd Year", "4th Year"];
-const genders = ["Male", "Female", "Other", "Prefer not to say"];
+// Update genders to match backend enum values (uppercase)
+const genders = ["MALE", "FEMALE", "OTHER", "PREFER_NOT_TO_SAY"];
+
+// Optional: Display labels for gender (if you want to show user-friendly text)
+const genderDisplayLabels = {
+  "MALE": "Male",
+  "FEMALE": "Female",
+  "OTHER": "Other",
+  "PREFER_NOT_TO_SAY": "Prefer not to say"
+};
+
+// Map frontend year strings to backend enum values
+const yearMapping = {
+  "1st Year": "FIRST_YEAR",
+  "2nd Year": "SECOND_YEAR",
+  "3rd Year": "THIRD_YEAR",
+  "4th Year": "FOURTH_YEAR"
+};
+
+// Map frontend department strings to backend enum values
+const departmentMapping = {
+  "Computer Science & Engineering": "CSE",
+  "Information Technology": "IT",
+  "Electronics & Communication": "ECE",
+  "Electrical & Electronics": "EEE",
+  "Mechanical Engineering": "MECH",
+  "Civil Engineering": "CIVIL",
+  "Chemical Engineering": "CHEM",
+  "Biomedical Engineering": "BME"
+};
+
+// API base URL - adjust based on your backend port
+const API_BASE_URL = "http://localhost:8080/api/students";
 
 export default function PlacementRegistration() {
   const [step, setStep] = useState(1);
   const [profilePreview, setProfilePreview] = useState(null);
+  const [profileFile, setProfileFile] = useState(null);
+  const [resumeFile, setResumeFile] = useState(null);
   const [resumeName, setResumeName] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitStatus, setSubmitStatus] = useState({ type: "", message: "" });
+  const [registrationId, setRegistrationId] = useState(null);
+  
   const profileRef = useRef();
   const resumeRef = useRef();
 
@@ -56,20 +94,51 @@ export default function PlacementRegistration() {
     const { name, value } = e.target;
     setForm((p) => ({ ...p, [name]: value }));
     setErrors((p) => ({ ...p, [name]: "" }));
+    // Clear submit status when user starts editing
+    setSubmitStatus({ type: "", message: "" });
   };
 
   const handleProfilePic = (e) => {
     const file = e.target.files[0];
     if (file) {
+      // Validate file size (max 2MB)
+      if (file.size > 2 * 1024 * 1024) {
+        setErrors(prev => ({ ...prev, profile: "File size should be less than 2MB" }));
+        return;
+      }
+      // Validate file type
+      if (!file.type.startsWith('image/')) {
+        setErrors(prev => ({ ...prev, profile: "Please upload an image file" }));
+        return;
+      }
+      
+      setProfileFile(file);
       const reader = new FileReader();
       reader.onloadend = () => setProfilePreview(reader.result);
       reader.readAsDataURL(file);
+      setErrors(prev => ({ ...prev, profile: "" }));
     }
   };
 
   const handleResume = (e) => {
     const file = e.target.files[0];
-    if (file) setResumeName(file.name);
+    if (file) {
+      // Validate file size (max 5MB)
+      if (file.size > 5 * 1024 * 1024) {
+        setErrors(prev => ({ ...prev, resume: "File size should be less than 5MB" }));
+        return;
+      }
+      // Validate file type
+      const validTypes = ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
+      if (!validTypes.includes(file.type)) {
+        setErrors(prev => ({ ...prev, resume: "Please upload PDF or DOC/DOCX file" }));
+        return;
+      }
+      
+      setResumeFile(file);
+      setResumeName(file.name);
+      setErrors(prev => ({ ...prev, resume: "" }));
+    }
   };
 
   const validateStep = () => {
@@ -104,12 +173,164 @@ export default function PlacementRegistration() {
     return Object.keys(newErrors).length === 0;
   };
 
-  const nextStep = () => { if (validateStep()) setStep((s) => Math.min(s + 1, 4)); };
+  const nextStep = () => { 
+    if (validateStep()) setStep((s) => Math.min(s + 1, 4)); 
+  };
+  
   const prevStep = () => setStep((s) => Math.max(s - 1, 1));
 
-  const handleSubmit = (e) => {
+  // Submit registration data (Steps 1-3)
+  const submitRegistrationData = async () => {
+    try {
+      // Prepare data for backend
+      const registrationData = {
+        registerNumber: form.registerNumber,
+        firstName: form.firstName,
+        lastName: form.lastName,
+        phone: form.phone,
+        email: form.email,
+        department: departmentMapping[form.department] || form.department,
+        year: yearMapping[form.year] || form.year,
+        gender: form.gender, // This is now uppercase (MALE, FEMALE, etc.)
+        dob: form.dob,
+        nativePlace: form.native,
+        cgpa: parseFloat(form.cgpa),
+        historyOfArrears: parseInt(form.historyOfArrears) || 0,
+        fatherName: form.fatherName,
+        motherName: form.motherName,
+        fatherOccupation: form.fatherOccupation,
+        motherOccupation: form.motherOccupation,
+        familyIncome: parseFloat(form.familyIncome),
+        parentPhone: form.parentPhone
+      };
+
+      const response = await fetch(`${API_BASE_URL}/register`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(registrationData)
+      });
+
+      const result = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(result.message || 'Failed to submit registration');
+      }
+
+      // Get the ID from the response or fetch the latest registration
+      const getResponse = await fetch(`${API_BASE_URL}`);
+      const allRegistrations = await getResponse.json();
+      const latestRegistration = allRegistrations[allRegistrations.length - 1];
+      
+      return latestRegistration?.id;
+    } catch (error) {
+      console.error('Error submitting registration:', error);
+      throw error;
+    }
+  };
+
+  // Upload profile picture
+  const uploadProfilePicture = async (id) => {
+    if (!profileFile) return;
+    
+    try {
+      const formData = new FormData();
+      formData.append('file', profileFile);
+      
+      const response = await fetch(`${API_BASE_URL}/${id}/profile-picture`, {
+        method: 'POST',
+        body: formData
+      });
+      
+      const result = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(result.message || 'Failed to upload profile picture');
+      }
+      
+      return result.url;
+    } catch (error) {
+      console.error('Error uploading profile picture:', error);
+      throw error;
+    }
+  };
+
+  // Upload resume
+  const uploadResume = async (id) => {
+    if (!resumeFile) return;
+    
+    try {
+      const formData = new FormData();
+      formData.append('file', resumeFile);
+      
+      const response = await fetch(`${API_BASE_URL}/${id}/resume`, {
+        method: 'POST',
+        body: formData
+      });
+      
+      const result = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(result.message || 'Failed to upload resume');
+      }
+      
+      return result.url;
+    } catch (error) {
+      console.error('Error uploading resume:', error);
+      throw error;
+    }
+  };
+
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    if (validateStep()) alert("🎉 Registration submitted successfully!");
+    
+    if (!validateStep()) {
+      return;
+    }
+    
+    // Validate that resume is uploaded
+    if (!resumeFile) {
+      setErrors(prev => ({ ...prev, resume: "Please upload your resume" }));
+      return;
+    }
+    
+    setIsSubmitting(true);
+    setSubmitStatus({ type: "info", message: "Submitting registration..." });
+    
+    try {
+      // Step 1: Submit registration data
+      const id = await submitRegistrationData();
+      setRegistrationId(id);
+      
+      if (!id) {
+        throw new Error("Could not get registration ID");
+      }
+      
+      setSubmitStatus({ type: "info", message: "Registration data saved. Uploading files..." });
+      
+      // Step 2: Upload profile picture (if provided)
+      if (profileFile) {
+        await uploadProfilePicture(id);
+        setSubmitStatus({ type: "info", message: "Profile picture uploaded. Uploading resume..." });
+      }
+      
+      // Step 3: Upload resume
+      await uploadResume(id);
+      
+      setSubmitStatus({ type: "success", message: "🎉 Registration submitted successfully! You can now close this window." });
+      
+      // Reset form after successful submission
+      setTimeout(() => {
+        setSubmitStatus({ type: "", message: "" });
+      }, 5000);
+      
+    } catch (error) {
+      console.error('Submission error:', error);
+      setSubmitStatus({ type: "error", message: `❌ Registration failed: ${error.message}. Please try again.` });
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const ic = (field) => `pr-input${errors[field] ? " pr-input--error" : ""}`;
@@ -159,6 +380,13 @@ export default function PlacementRegistration() {
             </div>
           ))}
         </div>
+
+        {/* Status Message */}
+        {submitStatus.message && (
+          <div className={`pr-status-message pr-status-message--${submitStatus.type}`}>
+            {submitStatus.message}
+          </div>
+        )}
 
         {/* Card */}
         <div className="pr-card">
@@ -262,7 +490,9 @@ export default function PlacementRegistration() {
                       <select name="gender" value={form.gender} onChange={handleChange}
                         className={sc("gender")}>
                         <option value="">Select Gender</option>
-                        {genders.map((g) => <option key={g} value={g}>{g}</option>)}
+                        {genders.map((g) => (
+                          <option key={g} value={g}>{genderDisplayLabels[g] || g}</option>
+                        ))}
                       </select>
                       <span className="pr-select-arrow">▾</span>
                     </div>
@@ -315,6 +545,7 @@ export default function PlacementRegistration() {
                         onChange={handleProfilePic} className="pr-hidden-input" />
                     </div>
                   </div>
+                  {errors.profile && <p className="pr-error">{errors.profile}</p>}
                 </div>
               </div>
             )}
@@ -390,13 +621,14 @@ export default function PlacementRegistration() {
                       </>
                     ) : (
                       <>
-                        <p className="pr-upload-title">Upload Resume / CV</p>
+                        <p className="pr-upload-title">Upload Resume / CV *</p>
                         <p className="pr-upload-hint">PDF, DOC, DOCX • Max 5MB</p>
                       </>
                     )}
                     <input ref={resumeRef} type="file" accept=".pdf,.doc,.docx"
                       onChange={handleResume} className="pr-hidden-input" />
                   </div>
+                  {errors.resume && <p className="pr-error">{errors.resume}</p>}
                 </div>
 
                 <div className="pr-summary-box">
@@ -432,7 +664,7 @@ export default function PlacementRegistration() {
 
             {/* Navigation */}
             <div className="pr-nav">
-              <button type="button" onClick={prevStep} disabled={step === 1}
+              <button type="button" onClick={prevStep} disabled={step === 1 || isSubmitting}
                 className="pr-btn-prev">
                 ← Previous
               </button>
@@ -444,11 +676,11 @@ export default function PlacementRegistration() {
               </div>
 
               {step < 4
-                ? <button type="button" onClick={nextStep} className="pr-btn-next">
+                ? <button type="button" onClick={nextStep} disabled={isSubmitting} className="pr-btn-next">
                     Next →
                   </button>
-                : <button type="submit" className="pr-btn-submit">
-                    🚀 Submit Registration
+                : <button type="submit" disabled={isSubmitting} className="pr-btn-submit">
+                    {isSubmitting ? "Submitting..." : "🚀 Submit Registration"}
                   </button>
               }
             </div>
