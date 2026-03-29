@@ -1,5 +1,7 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import "./PlacementRegistration.css";
+
+// ─── Constants ───────────────────────────────────────────────────────────────
 
 const steps = [
   { id: 1, label: "Academic Info", icon: "🎓" },
@@ -20,26 +22,22 @@ const departments = [
 ];
 
 const years = ["1st Year", "2nd Year", "3rd Year", "4th Year"];
-// Update genders to match backend enum values (uppercase)
-const genders = ["MALE", "FEMALE", "OTHER", "PREFER_NOT_TO_SAY"];
 
-// Optional: Display labels for gender (if you want to show user-friendly text)
+const genders = ["MALE", "FEMALE", "OTHER", "PREFER_NOT_TO_SAY"];
 const genderDisplayLabels = {
-  "MALE": "Male",
-  "FEMALE": "Female",
-  "OTHER": "Other",
-  "PREFER_NOT_TO_SAY": "Prefer not to say"
+  MALE: "Male",
+  FEMALE: "Female",
+  OTHER: "Other",
+  PREFER_NOT_TO_SAY: "Prefer not to say",
 };
 
-// Map frontend year strings to backend enum values
 const yearMapping = {
   "1st Year": "FIRST_YEAR",
   "2nd Year": "SECOND_YEAR",
   "3rd Year": "THIRD_YEAR",
-  "4th Year": "FOURTH_YEAR"
+  "4th Year": "FOURTH_YEAR",
 };
 
-// Map frontend department strings to backend enum values
 const departmentMapping = {
   "Computer Science & Engineering": "CSE",
   "Information Technology": "IT",
@@ -48,11 +46,183 @@ const departmentMapping = {
   "Mechanical Engineering": "MECH",
   "Civil Engineering": "CIVIL",
   "Chemical Engineering": "CHEM",
-  "Biomedical Engineering": "BME"
+  "Biomedical Engineering": "BME",
 };
 
-// API base URL - adjust based on your backend port
 const API_BASE_URL = "http://localhost:8080/api/students";
+const STORAGE_KEY = "placementForm";
+const SUBMITTED_KEY = "placementFormSubmitted";
+
+// ─── Toast Component ──────────────────────────────────────────────────────────
+
+function Toast({ toasts, removeToast }) {
+  return (
+    <div className="pr-toast-container">
+      {toasts.map((t) => (
+        <div key={t.id} className={`pr-toast pr-toast--${t.type}`}>
+          <span className="pr-toast-icon">
+            {t.type === "success" ? "✅" : t.type === "error" ? "❌" : t.type === "warning" ? "⚠️" : "ℹ️"}
+          </span>
+          <span className="pr-toast-msg">{t.message}</span>
+          <button className="pr-toast-close" onClick={() => removeToast(t.id)}>×</button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ─── useToast Hook ────────────────────────────────────────────────────────────
+
+function useToast() {
+  const [toasts, setToasts] = useState([]);
+
+  const addToast = useCallback((message, type = "info", duration = 4000) => {
+    const id = Date.now() + Math.random();
+    setToasts((prev) => [...prev, { id, message, type }]);
+    if (duration > 0) {
+      setTimeout(() => {
+        setToasts((prev) => prev.filter((t) => t.id !== id));
+      }, duration);
+    }
+    return id;
+  }, []);
+
+  const removeToast = useCallback((id) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  }, []);
+
+  return { toasts, addToast, removeToast };
+}
+
+// ─── Validation ───────────────────────────────────────────────────────────────
+
+const REGISTER_NUMBER_REGEX = /^[A-Za-z0-9]{4,20}$/;
+const NAME_REGEX = /^[A-Za-z\s'-]{2,50}$/;
+const PHONE_REGEX = /^\d{10}$/;
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const INCOME_REGEX = /^\d+(\.\d{1,2})?$/;
+
+function validateStep(step, form) {
+  const errors = {};
+
+  if (step === 1) {
+    if (!form.registerNumber.trim())
+      errors.registerNumber = "Register number is required";
+    else if (!REGISTER_NUMBER_REGEX.test(form.registerNumber.trim()))
+      errors.registerNumber = "Only letters and digits, 4–20 characters";
+
+    if (!form.firstName.trim()) errors.firstName = "First name is required";
+    else if (!NAME_REGEX.test(form.firstName.trim()))
+      errors.firstName = "Enter a valid first name (letters only, 2–50 chars)";
+
+    if (!form.lastName.trim()) errors.lastName = "Last name is required";
+    else if (!NAME_REGEX.test(form.lastName.trim()))
+      errors.lastName = "Enter a valid last name (letters only, 2–50 chars)";
+
+    if (!form.phone.trim()) errors.phone = "Phone number is required";
+    else if (!PHONE_REGEX.test(form.phone.trim()))
+      errors.phone = "Enter a valid 10-digit mobile number";
+
+    if (!form.email.trim()) errors.email = "Email is required";
+    else if (!EMAIL_REGEX.test(form.email.trim()))
+      errors.email = "Enter a valid email address";
+
+    if (!form.department) errors.department = "Please select a department";
+    if (!form.year) errors.year = "Please select your year";
+  }
+
+  if (step === 2) {
+    if (!form.gender) errors.gender = "Please select your gender";
+
+    if (!form.dob) {
+      errors.dob = "Date of birth is required";
+    } else {
+      const dob = new Date(form.dob);
+      const today = new Date();
+      const age = today.getFullYear() - dob.getFullYear();
+      if (dob >= today) errors.dob = "Date of birth must be in the past";
+      else if (age < 15 || age > 35)
+        errors.dob = "Age must be between 15 and 35 years";
+    }
+
+    if (!form.native.trim()) errors.native = "Native place is required";
+    else if (form.native.trim().length < 2)
+      errors.native = "Enter at least 2 characters";
+
+    if (form.cgpa === "") errors.cgpa = "CGPA is required";
+    else if (isNaN(form.cgpa) || Number(form.cgpa) < 0 || Number(form.cgpa) > 10)
+      errors.cgpa = "CGPA must be between 0.00 and 10.00";
+
+    if (form.historyOfArrears === "")
+      errors.historyOfArrears = "History of arrears is required (enter 0 if none)";
+    else if (
+      isNaN(form.historyOfArrears) ||
+      parseInt(form.historyOfArrears) < 0
+    )
+      errors.historyOfArrears = "Must be 0 or a positive number";
+  }
+
+  if (step === 3) {
+    if (!form.fatherName.trim()) errors.fatherName = "Father's name is required";
+    else if (!NAME_REGEX.test(form.fatherName.trim()))
+      errors.fatherName = "Enter a valid name";
+
+    if (!form.motherName.trim()) errors.motherName = "Mother's name is required";
+    else if (!NAME_REGEX.test(form.motherName.trim()))
+      errors.motherName = "Enter a valid name";
+
+    if (!form.fatherOccupation.trim())
+      errors.fatherOccupation = "Father's occupation is required";
+    if (!form.motherOccupation.trim())
+      errors.motherOccupation = "Mother's occupation is required";
+
+    if (!form.familyIncome.toString().trim())
+      errors.familyIncome = "Family income is required";
+    else if (!INCOME_REGEX.test(form.familyIncome.toString().trim()) || Number(form.familyIncome) < 0)
+      errors.familyIncome = "Enter a valid positive income amount";
+
+    if (!form.parentPhone.trim())
+      errors.parentPhone = "Parent's phone number is required";
+    else if (!PHONE_REGEX.test(form.parentPhone.trim()))
+      errors.parentPhone = "Enter a valid 10-digit phone number";
+    else if (
+      form.phone.trim() &&
+      PHONE_REGEX.test(form.phone.trim()) &&
+      form.parentPhone.trim() === form.phone.trim()
+    )
+      errors.parentPhone =
+        "Parent's phone number must differ from student's phone number";
+  }
+
+  if (step === 4) {
+    // resume is validated in handleSubmit
+  }
+
+  return errors;
+}
+
+// ─── Main Component ───────────────────────────────────────────────────────────
+
+const INITIAL_FORM = {
+  registerNumber: "",
+  firstName: "",
+  lastName: "",
+  phone: "",
+  email: "",
+  department: "",
+  year: "",
+  gender: "",
+  dob: "",
+  native: "",
+  cgpa: "",
+  historyOfArrears: "",
+  fatherName: "",
+  motherName: "",
+  fatherOccupation: "",
+  motherOccupation: "",
+  familyIncome: "",
+  parentPhone: "",
+};
 
 export default function PlacementRegistration() {
   const [step, setStep] = useState(1);
@@ -61,277 +231,223 @@ export default function PlacementRegistration() {
   const [resumeFile, setResumeFile] = useState(null);
   const [resumeName, setResumeName] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [submitStatus, setSubmitStatus] = useState({ type: "", message: "" });
-  const [registrationId, setRegistrationId] = useState(null);
-  
+  const [submitted, setSubmitted] = useState(false);
+  const [form, setForm] = useState(INITIAL_FORM);
+  const [errors, setErrors] = useState({});
+
+
   const profileRef = useRef();
   const resumeRef = useRef();
+  const submitLockRef = useRef(false); // double-submission lock
 
-  const [form, setForm] = useState({
-    registerNumber: "",
-    firstName: "",
-    lastName: "",
-    phone: "",
-    email: "",
-    department: "",
-    year: "",
-    gender: "",
-    dob: "",
-    native: "",
-    cgpa: "",
-    historyOfArrears: "",
-    fatherName: "",
-    motherName: "",
-    fatherOccupation: "",
-    motherOccupation: "",
-    familyIncome: "",
-    parentPhone: "",
-  });
+  const { toasts, addToast, removeToast } = useToast();
 
-  const [errors, setErrors] = useState({});
+  // ── Restore saved progress ────────────────────────────────────────────────
+  // sessionStorage is used so data never survives a page refresh.
+  // A refresh always shows a blank form — even after successful submission.
+  useEffect(() => {
+    // If the form was submitted in this same tab session, show the success screen.
+    // On page refresh, sessionStorage is cleared by the browser, so this never fires.
+    if (sessionStorage.getItem(SUBMITTED_KEY) === "true") {
+      setSubmitted(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ── Auto-save on change ───────────────────────────────────────────────────
+  useEffect(() => {
+    if (submitted) return;
+    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(form));
+  }, [form, submitted]);
+
+  // ── Handlers ──────────────────────────────────────────────────────────────
 
   const handleChange = (e) => {
     const { name, value } = e.target;
     setForm((p) => ({ ...p, [name]: value }));
     setErrors((p) => ({ ...p, [name]: "" }));
-    // Clear submit status when user starts editing
-    setSubmitStatus({ type: "", message: "" });
   };
 
   const handleProfilePic = (e) => {
     const file = e.target.files[0];
-    if (file) {
-      // Validate file size (max 2MB)
-      if (file.size > 2 * 1024 * 1024) {
-        setErrors(prev => ({ ...prev, profile: "File size should be less than 2MB" }));
-        return;
-      }
-      // Validate file type
-      if (!file.type.startsWith('image/')) {
-        setErrors(prev => ({ ...prev, profile: "Please upload an image file" }));
-        return;
-      }
-      
-      setProfileFile(file);
-      const reader = new FileReader();
-      reader.onloadend = () => setProfilePreview(reader.result);
-      reader.readAsDataURL(file);
-      setErrors(prev => ({ ...prev, profile: "" }));
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) {
+      setErrors((p) => ({ ...p, profile: "File size must be under 2MB" }));
+      addToast("Profile picture too large (max 2MB)", "error");
+      return;
     }
+    if (!file.type.startsWith("image/")) {
+      setErrors((p) => ({ ...p, profile: "Please upload a valid image file" }));
+      addToast("Invalid file type. Please upload an image.", "error");
+      return;
+    }
+    setProfileFile(file);
+    const reader = new FileReader();
+    reader.onloadend = () => setProfilePreview(reader.result);
+    reader.readAsDataURL(file);
+    setErrors((p) => ({ ...p, profile: "" }));
+    addToast("Profile picture selected ✓", "success", 2500);
   };
 
   const handleResume = (e) => {
     const file = e.target.files[0];
-    if (file) {
-      // Validate file size (max 5MB)
-      if (file.size > 5 * 1024 * 1024) {
-        setErrors(prev => ({ ...prev, resume: "File size should be less than 5MB" }));
-        return;
-      }
-      // Validate file type
-      const validTypes = ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
-      if (!validTypes.includes(file.type)) {
-        setErrors(prev => ({ ...prev, resume: "Please upload PDF or DOC/DOCX file" }));
-        return;
-      }
-      
-      setResumeFile(file);
-      setResumeName(file.name);
-      setErrors(prev => ({ ...prev, resume: "" }));
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) {
+      setErrors((p) => ({ ...p, resume: "File size must be under 5MB" }));
+      addToast("Resume too large (max 5MB)", "error");
+      return;
     }
+    const validTypes = [
+      "application/pdf",
+      "application/msword",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ];
+    if (!validTypes.includes(file.type)) {
+      setErrors((p) => ({ ...p, resume: "Upload a PDF or DOC/DOCX file" }));
+      addToast("Invalid file type. PDF, DOC, or DOCX only.", "error");
+      return;
+    }
+    setResumeFile(file);
+    setResumeName(file.name);
+    setErrors((p) => ({ ...p, resume: "" }));
+    addToast("Resume uploaded ✓", "success", 2500);
   };
 
-  const validateStep = () => {
-    const newErrors = {};
-    if (step === 1) {
-      if (!form.registerNumber) newErrors.registerNumber = "Required";
-      if (!form.firstName) newErrors.firstName = "Required";
-      if (!form.lastName) newErrors.lastName = "Required";
-      if (!form.phone || !/^\d{10}$/.test(form.phone))
-        newErrors.phone = "Enter valid 10-digit number";
-      if (!form.email || !/\S+@\S+\.\S+/.test(form.email))
-        newErrors.email = "Enter valid email";
-      if (!form.department) newErrors.department = "Required";
-      if (!form.year) newErrors.year = "Required";
-    } else if (step === 2) {
-      if (!form.gender) newErrors.gender = "Required";
-      if (!form.dob) newErrors.dob = "Required";
-      if (!form.native) newErrors.native = "Required";
-      if (!form.cgpa || isNaN(form.cgpa) || form.cgpa < 0 || form.cgpa > 10)
-        newErrors.cgpa = "Enter CGPA between 0-10";
-      if (form.historyOfArrears === "") newErrors.historyOfArrears = "Required";
-    } else if (step === 3) {
-      if (!form.fatherName) newErrors.fatherName = "Required";
-      if (!form.motherName) newErrors.motherName = "Required";
-      if (!form.fatherOccupation) newErrors.fatherOccupation = "Required";
-      if (!form.motherOccupation) newErrors.motherOccupation = "Required";
-      if (!form.familyIncome) newErrors.familyIncome = "Required";
-      if (!form.parentPhone || !/^\d{10}$/.test(form.parentPhone))
-        newErrors.parentPhone = "Enter valid 10-digit number";
+  // ── Navigation ────────────────────────────────────────────────────────────
+
+  const nextStep = () => {
+    const errs = validateStep(step, form);
+    if (Object.keys(errs).length > 0) {
+      setErrors(errs);
+      addToast("Please fix the errors before continuing", "warning");
+      return;
     }
-    setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
+    setErrors({});
+    setStep((s) => Math.min(s + 1, 4));
+    addToast(`Step ${step} complete ✓`, "success", 2000);
   };
 
-  const nextStep = () => { 
-    if (validateStep()) setStep((s) => Math.min(s + 1, 4)); 
-  };
-  
   const prevStep = () => setStep((s) => Math.max(s - 1, 1));
 
-  // Submit registration data (Steps 1-3)
+  // ── API calls ─────────────────────────────────────────────────────────────
+
   const submitRegistrationData = async () => {
-    try {
-      // Prepare data for backend
-      const registrationData = {
-        registerNumber: form.registerNumber,
-        firstName: form.firstName,
-        lastName: form.lastName,
-        phone: form.phone,
-        email: form.email,
-        department: departmentMapping[form.department] || form.department,
-        year: yearMapping[form.year] || form.year,
-        gender: form.gender, // This is now uppercase (MALE, FEMALE, etc.)
-        dob: form.dob,
-        nativePlace: form.native,
-        cgpa: parseFloat(form.cgpa),
-        historyOfArrears: parseInt(form.historyOfArrears) || 0,
-        fatherName: form.fatherName,
-        motherName: form.motherName,
-        fatherOccupation: form.fatherOccupation,
-        motherOccupation: form.motherOccupation,
-        familyIncome: parseFloat(form.familyIncome),
-        parentPhone: form.parentPhone
-      };
+    const registrationData = {
+      registerNumber: form.registerNumber.trim(),
+      firstName: form.firstName.trim(),
+      lastName: form.lastName.trim(),
+      phone: form.phone.trim(),
+      email: form.email.trim(),
+      department: departmentMapping[form.department] || form.department,
+      year: yearMapping[form.year] || form.year,
+      gender: form.gender,
+      dob: form.dob,
+      nativePlace: form.native.trim(),
+      cgpa: parseFloat(form.cgpa),
+      historyOfArrears: parseInt(form.historyOfArrears) || 0,
+      fatherName: form.fatherName.trim(),
+      motherName: form.motherName.trim(),
+      fatherOccupation: form.fatherOccupation.trim(),
+      motherOccupation: form.motherOccupation.trim(),
+      familyIncome: parseFloat(form.familyIncome),
+      parentPhone: form.parentPhone.trim(),
+    };
 
-      const response = await fetch(`${API_BASE_URL}/register`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(registrationData)
-      });
+    const response = await fetch(`${API_BASE_URL}/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(registrationData),
+    });
 
-      const result = await response.json();
-      
-      if (!response.ok) {
-        throw new Error(result.message || 'Failed to submit registration');
-      }
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.message || "Registration failed");
 
-      // Get the ID from the response or fetch the latest registration
-      const getResponse = await fetch(`${API_BASE_URL}`);
-      const allRegistrations = await getResponse.json();
-      const latestRegistration = allRegistrations[allRegistrations.length - 1];
-      
-      return latestRegistration?.id;
-    } catch (error) {
-      console.error('Error submitting registration:', error);
-      throw error;
-    }
+    // Retrieve the new student ID
+    const getResp = await fetch(`${API_BASE_URL}`);
+    const all = await getResp.json();
+    return all[all.length - 1]?.id;
   };
 
-  // Upload profile picture
   const uploadProfilePicture = async (id) => {
     if (!profileFile) return;
-    
-    try {
-      const formData = new FormData();
-      formData.append('file', profileFile);
-      
-      const response = await fetch(`${API_BASE_URL}/${id}/profile-picture`, {
-        method: 'POST',
-        body: formData
-      });
-      
-      const result = await response.json();
-      
-      if (!response.ok) {
-        throw new Error(result.message || 'Failed to upload profile picture');
-      }
-      
-      return result.url;
-    } catch (error) {
-      console.error('Error uploading profile picture:', error);
-      throw error;
-    }
+    const fd = new FormData();
+    fd.append("file", profileFile);
+    const res = await fetch(`${API_BASE_URL}/${id}/profile-picture`, {
+      method: "POST",
+      body: fd,
+    });
+    const r = await res.json();
+    if (!res.ok) throw new Error(r.message || "Profile picture upload failed");
+    return r.url;
   };
 
-  // Upload resume
   const uploadResume = async (id) => {
     if (!resumeFile) return;
-    
-    try {
-      const formData = new FormData();
-      formData.append('file', resumeFile);
-      
-      const response = await fetch(`${API_BASE_URL}/${id}/resume`, {
-        method: 'POST',
-        body: formData
-      });
-      
-      const result = await response.json();
-      
-      if (!response.ok) {
-        throw new Error(result.message || 'Failed to upload resume');
-      }
-      
-      return result.url;
-    } catch (error) {
-      console.error('Error uploading resume:', error);
-      throw error;
-    }
+    const fd = new FormData();
+    fd.append("file", resumeFile);
+    const res = await fetch(`${API_BASE_URL}/${id}/resume`, {
+      method: "POST",
+      body: fd,
+    });
+    const r = await res.json();
+    if (!res.ok) throw new Error(r.message || "Resume upload failed");
+    return r.url;
   };
+
+  // ── Submit ────────────────────────────────────────────────────────────────
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    
-    if (!validateStep()) {
+
+    // Prevent double submission
+    if (submitLockRef.current || isSubmitting) {
+      addToast("Submission already in progress, please wait…", "warning");
       return;
     }
-    
-    // Validate that resume is uploaded
+
+    // Validate step 4
+    const errs = validateStep(4, form);
     if (!resumeFile) {
-      setErrors(prev => ({ ...prev, resume: "Please upload your resume" }));
+      errs.resume = "Please upload your resume before submitting";
+    }
+    if (Object.keys(errs).length > 0) {
+      setErrors(errs);
+      addToast("Please upload your resume to continue", "warning");
       return;
     }
-    
+
+    // Acquire lock
+    submitLockRef.current = true;
     setIsSubmitting(true);
-    setSubmitStatus({ type: "info", message: "Submitting registration..." });
-    
+
     try {
-      // Step 1: Submit registration data
       const id = await submitRegistrationData();
-      setRegistrationId(id);
-      
-      if (!id) {
-        throw new Error("Could not get registration ID");
-      }
-      
-      setSubmitStatus({ type: "info", message: "Registration data saved. Uploading files..." });
-      
-      // Step 2: Upload profile picture (if provided)
+      if (!id) throw new Error("Could not retrieve registration ID");
+
       if (profileFile) {
         await uploadProfilePicture(id);
-        setSubmitStatus({ type: "info", message: "Profile picture uploaded. Uploading resume..." });
+        addToast("Profile picture uploaded ✓", "success", 2500);
       }
-      
-      // Step 3: Upload resume
+
       await uploadResume(id);
-      
-      setSubmitStatus({ type: "success", message: "🎉 Registration submitted successfully! You can now close this window." });
-      
-      // Reset form after successful submission
-      setTimeout(() => {
-        setSubmitStatus({ type: "", message: "" });
-      }, 5000);
-      
+      addToast("Resume uploaded ✓", "success", 2500);
+
+      // Mark as submitted and clear saved draft
+      sessionStorage.setItem(SUBMITTED_KEY, "true");
+      sessionStorage.removeItem(STORAGE_KEY);
+      setSubmitted(true);
+
+      addToast("🎉 Registration submitted successfully!", "success", 6000);
     } catch (error) {
-      console.error('Submission error:', error);
-      setSubmitStatus({ type: "error", message: `❌ Registration failed: ${error.message}. Please try again.` });
+      console.error("Submission error:", error);
+      addToast(`Registration failed: ${error.message}. Please try again.`, "error", 6000);
     } finally {
       setIsSubmitting(false);
+      submitLockRef.current = false;
     }
   };
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
 
   const ic = (field) => `pr-input${errors[field] ? " pr-input--error" : ""}`;
   const sc = (field) => `pr-select${errors[field] ? " pr-select--error" : ""}`;
@@ -348,8 +464,38 @@ export default function PlacementRegistration() {
     return "pr-dot pr-dot--inactive";
   };
 
+  // ── Already submitted guard ───────────────────────────────────────────────
+
+  if (submitted) {
+    return (
+      <div className="pr-page">
+        <Toast toasts={toasts} removeToast={removeToast} />
+        <div className="pr-container">
+          <div className="pr-success-screen">
+            <div className="pr-success-icon">🎉</div>
+            <h2 className="pr-success-title">Registration Complete!</h2>
+            <p className="pr-success-msg">
+              Your placement registration has been submitted successfully.
+              The placement cell will reach out to you via email.
+            </p>
+            <p className="pr-success-email">{form.email}</p>
+          </div>
+          <p className="pr-footer">
+            © 2025 Placement Portal • For support contact{" "}
+            <span className="pr-footer-link">placement@college.edu</span>
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Render ────────────────────────────────────────────────────────────────
+
   return (
     <div className="pr-page">
+      {/* Toast notifications */}
+      <Toast toasts={toasts} removeToast={removeToast} />
+
       <div className="pr-container">
 
         {/* Header */}
@@ -381,13 +527,6 @@ export default function PlacementRegistration() {
           ))}
         </div>
 
-        {/* Status Message */}
-        {submitStatus.message && (
-          <div className={`pr-status-message pr-status-message--${submitStatus.type}`}>
-            {submitStatus.message}
-          </div>
-        )}
-
         {/* Card */}
         <div className="pr-card">
 
@@ -409,7 +548,7 @@ export default function PlacementRegistration() {
           </div>
 
           {/* Form */}
-          <form className="pr-form" onSubmit={handleSubmit} key={step}>
+          <form className="pr-form" onSubmit={handleSubmit} noValidate>
 
             {/* STEP 1: Academic Info */}
             {step === 1 && (
@@ -501,6 +640,7 @@ export default function PlacementRegistration() {
                   <div className="pr-field">
                     <label className="pr-label">Date of Birth *</label>
                     <input name="dob" type="date" value={form.dob} onChange={handleChange}
+                      max={new Date().toISOString().split("T")[0]}
                       className={ic("dob")} />
                     {errors.dob && <p className="pr-error">{errors.dob}</p>}
                   </div>
@@ -596,7 +736,10 @@ export default function PlacementRegistration() {
                         {errors.familyIncome && <p className="pr-error">{errors.familyIncome}</p>}
                       </div>
                       <div className="pr-field">
-                        <label className="pr-label pr-label--muted">Parent's Phone *</label>
+                        <label className="pr-label pr-label--muted">
+                          Parent's Phone *
+                          <span className="pr-label-hint"> (must differ from student's)</span>
+                        </label>
                         <input name="parentPhone" value={form.parentPhone} onChange={handleChange}
                           placeholder="10-digit number" maxLength={10} className={ic("parentPhone")} />
                         {errors.parentPhone && <p className="pr-error">{errors.parentPhone}</p>}
@@ -679,8 +822,16 @@ export default function PlacementRegistration() {
                 ? <button type="button" onClick={nextStep} disabled={isSubmitting} className="pr-btn-next">
                     Next →
                   </button>
-                : <button type="submit" disabled={isSubmitting} className="pr-btn-submit">
-                    {isSubmitting ? "Submitting..." : "🚀 Submit Registration"}
+                : <button
+                    type="submit"
+                    disabled={isSubmitting || submitLockRef.current}
+                    className={`pr-btn-submit${isSubmitting ? " pr-btn-submit--loading" : ""}`}
+                  >
+                    {isSubmitting ? (
+                      <><span className="pr-spinner" /> Submitting…</>
+                    ) : (
+                      "🚀 Submit Registration"
+                    )}
                   </button>
               }
             </div>
